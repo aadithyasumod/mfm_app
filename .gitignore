@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+.DS_Store
+.env
+.env.*
+.claude/
+CLAUDE.md
+AGENTS.md
+
+# Caches and build artifacts written at runtime
+*.parquet
+*_status.json
+price_cache_metadata.json
+*.log

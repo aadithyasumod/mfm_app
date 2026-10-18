@@ -498,10 +498,10 @@ def _hardcoded_fallback() -> pd.DataFrame:
 
 def _merge_exchanges(nse_df: pd.DataFrame | None, bse_df: pd.DataFrame | None) -> pd.DataFrame:
     """
-    Combine NSE + BSE rows.
-    For dual-listed stocks (same ISIN), keep BOTH rows so the user can choose
-    which exchange to analyse on. They'll appear separately in autocomplete:
-      'Reliance Industries (NSE)' and 'Reliance Industries (BSE)'
+    Combine NSE + BSE rows using Model B (company-level universe).
+    For dual-listed stocks (same ISIN), keep only the NSE ticker.
+    BSE-only stocks (ISIN not present on NSE) are retained.
+    Rows with no ISIN are kept as-is (no ISIN dedup applied to them).
     """
     parts = []
     if nse_df is not None and not nse_df.empty:
@@ -513,6 +513,21 @@ def _merge_exchanges(nse_df: pd.DataFrame | None, bse_df: pd.DataFrame | None) -
         return _hardcoded_fallback()
 
     combined = pd.concat(parts, ignore_index=True)
+
+    # ISIN dedup: prefer NSE for dual-listed stocks
+    # Split rows that have a non-empty ISIN from those that don't
+    has_isin_mask = combined["isin"].notna() & (combined["isin"].str.strip() != "")
+    has_isin  = combined[has_isin_mask].copy()
+    no_isin   = combined[~has_isin_mask].copy()
+
+    # Sort so "BSE" < "NSE" alphabetically — keep="last" retains NSE
+    deduped = (
+        has_isin
+        .sort_values("exchange")
+        .drop_duplicates(subset="isin", keep="last")
+    )
+
+    combined = pd.concat([deduped, no_isin], ignore_index=True)
     combined = combined.drop_duplicates(subset="ticker_yf")
     combined = combined.reset_index(drop=True)
     return combined

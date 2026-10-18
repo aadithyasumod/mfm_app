@@ -16,7 +16,7 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
-import os, io, time
+import os, io, time, json, math
 
 from nifty500_tickers import (
     resolve_ticker, ALL_TICKERS, NAME_TO_TICKER,
@@ -32,6 +32,12 @@ from mfm_engine import (
     generate_interpretation, FACTOR_LABELS, WEIGHTS,
 )
 from universe_builder import build_universe, universe_stats, UNIVERSE_FILE
+from price_cache import (
+    is_price_cache_stale, is_price_build_running,
+    start_background_price_build, get_price_build_status,
+    load_price_cache, get_price,
+    PRICE_CACHE_FILE, PRICE_METADATA_FILE,
+)
 
 # ─────────────────────────────────────────────────────────────────────
 #  PAGE CONFIG
@@ -188,7 +194,9 @@ def render_header_bar(name, symbol, cmp, day_change, sector, mkt_cap, exchange="
         f'<div style="font-family:\'EB Garamond\',serif;font-size:0.82rem;color:{t["muted"]};'
         f'letter-spacing:0.1em;text-transform:uppercase;margin-top:3px;">{tc} &nbsp;·&nbsp; {sector} &nbsp;·&nbsp; {mkt_cap}</div>'
         f'</div><div style="text-align:right;">'
-        f'<div style="font-family:\'Playfair Display\',serif;font-size:1.75rem;font-weight:600;color:{t["text"]};">₹{cmp:,.2f}</div>'
+        f'<div style="font-family:\'Playfair Display\',serif;font-size:1.75rem;font-weight:600;color:{t["text"]};">₹{cmp:,.2f}'
+        f'<span style="font-family:\'EB Garamond\',serif;font-size:0.68rem;color:{t["muted"]};'
+        f'letter-spacing:0.1em;text-transform:uppercase;margin-left:6px;vertical-align:middle;">Live</span></div>'
         f'<div style="font-family:\'EB Garamond\',serif;font-size:0.95rem;color:{cc};">{arrow} {sign}{day_change:.2f}%</div>'
         f'</div></div></div>',
         unsafe_allow_html=True,
@@ -478,6 +486,82 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
 
+        st.markdown(f"<hr style='border-color:{t['border']};margin:0.8rem 0;'>", unsafe_allow_html=True)
+
+        # ── EOD Prices ────────────────────────────────────────────────
+        st.markdown(
+            f'<div style="font-family:\'Playfair Display\',serif;font-size:0.85rem;'
+            f'color:{t["gold"]};margin-bottom:0.4rem;">EOD Prices</div>',
+            unsafe_allow_html=True,
+        )
+
+        price_status  = get_price_build_status()
+        price_running = price_status.get("running", False)
+
+        if price_running:
+            p_done  = price_status.get("done", 0)
+            p_total = price_status.get("total", 1)
+            p_curr  = price_status.get("current", "…")
+            p_pct   = int(p_done / max(p_total, 1) * 100)
+            st.markdown(
+                f'<div style="font-family:\'EB Garamond\',serif;font-size:0.82rem;'
+                f'color:{t["gold"]};line-height:1.7;">⟳ Building in background…<br>'
+                f'{p_done:,} / {p_total:,} stocks<br>'
+                f'<span style="color:{t["muted"]};font-size:0.75rem;">{p_curr}</span></div>',
+                unsafe_allow_html=True,
+            )
+            st.progress(p_pct)
+            if st.button("Refresh Status", key="price_refresh_status"):
+                st.rerun()
+        elif os.path.exists(PRICE_CACHE_FILE):
+            try:
+                meta = {}
+                if os.path.exists(PRICE_METADATA_FILE):
+                    with open(PRICE_METADATA_FILE) as _f:
+                        meta = json.load(_f)
+                n_prices   = len(pd.read_parquet(PRICE_CACHE_FILE))
+                last_built = meta.get("last_build_complete", "")[:10]
+                duration   = meta.get("last_build_duration_seconds", "")
+                stale_flag = "◌ Stale" if is_price_cache_stale() else "✦ Current"
+                dur_str    = f"<br>Built in: {duration}s" if duration else ""
+                st.markdown(
+                    f'<div style="font-family:\'EB Garamond\',serif;font-size:0.82rem;'
+                    f'color:{t["muted2"]};line-height:1.7;">'
+                    f'Status: <span style="color:{t["gold"]};">{stale_flag}</span><br>'
+                    f'Stocks cached: {n_prices:,}<br>'
+                    f'Last built: {last_built}{dur_str}</div>',
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
+            if price_status.get("error"):
+                st.markdown(
+                    f'<div style="font-size:0.75rem;color:{t["red"]};">'
+                    f'Last error: {price_status["error"][:80]}</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                f'<div style="font-family:\'EB Garamond\',serif;font-size:0.82rem;color:{t["muted2"]};">'
+                f'No cache — prices fetched live on demand.</div>',
+                unsafe_allow_html=True,
+            )
+
+        if st.button("Refresh Prices", key="refresh_prices"):
+            ok = start_background_price_build(ALL_TICKERS)
+            if ok:
+                st.toast("Price cache build started ✦")
+            else:
+                st.toast("Build already running — check status above.")
+            st.rerun()
+
+        st.markdown(
+            f'<div style="font-family:\'EB Garamond\',serif;font-size:0.72rem;color:{t["muted"]}; '
+            f'margin-top:0.5rem;line-height:1.6;">EOD prices for all NSE + BSE stocks. '
+            f'Auto-refreshes after 16:00 IST. ~3–5 min to build.</div>',
+            unsafe_allow_html=True,
+        )
+
         # ── Watchlist ─────────────────────────────────────────────────
         if st.session_state.watchlist:
             st.markdown(
@@ -650,7 +734,6 @@ def batch_screener_view():
         "NIFTY PHARMA":   "SUNPHARMA\nCIPLA\nDRREDDY\nDIVISLAB\nLUPIN\nBIOCON\nAUROPHARMA\nTORNTPHARM\nIPCALAB\nGLENMARK",
         "NIFTY AUTO":     "MARUTI\nTATAMOTORS\nM&M\nBAJAJ-AUTO\nHEREMOTOCO\nEICHERMOT\nTVSMOTOR\nMOTHERSON\nBOSCHLTD\nSCHAEFFLER",
         "Defence":        "HAL\nBEL\nBHEL\nBEML\nCOCHINSHIP\nMAZDOCK\nGRSE\nSOLARINDS\nDATAPATTNS\nMTAR",
-        "My Portfolio":   "LUMAXTECH\nAVANTIFEED\nINDHOTEL\nVIMTALABS\nGALLANTT\nSARDAEN\nSHAILY\nUPL\nBLUEJET",
     }
     col_pre,_ = st.columns([2,5])
     with col_pre:
@@ -683,13 +766,30 @@ def batch_screener_view():
         results = fetch_batch_scores(symbols,progress_callback=cb)
     prog.progress(100); stat.empty()
     if not results: st.warning("No results. Verify tickers are valid NSE symbols or BSE scrip codes."); return
+
+    # Override CMP and Day Change with EOD cached prices for consistency
+    _pc = st.session_state.get("price_cache", pd.DataFrame())
+    if not _pc.empty:
+        for r in results:
+            _suffix = ".BO" if r.get("Exchange") == "BSE" else ".NS"
+            _tk = r["Ticker"] + _suffix
+            _row = _pc[_pc["ticker"] == _tk]
+            if not _row.empty:
+                _lc = float(_row["last_close"].iloc[0])
+                _pv = float(_row["prev_close"].iloc[0])
+                if not math.isnan(_lc):
+                    r["CMP (₹)"] = round(_lc, 2)
+                    if not math.isnan(_pv) and _pv != 0:
+                        r["Day (%)"] = round((_lc / _pv - 1) * 100, 2)
+
     df = pd.DataFrame(results)
+    _price_source = "EOD prices" if not _pc.empty else "live prices"
     col_hdr,col_exp = st.columns([5,1])
     with col_hdr:
         st.markdown(
             f'<div style="font-family:\'EB Garamond\',serif;font-size:0.7rem;letter-spacing:0.18em;'
             f'text-transform:uppercase;color:{t["muted"]};margin:0.8rem 0 0.5rem;">'
-            f'{len(df)} stocks · ranked by composite momentum</div>',
+            f'{len(df)} stocks · ranked by composite momentum · {_price_source}</div>',
             unsafe_allow_html=True,
         )
     with col_exp:
@@ -739,7 +839,24 @@ def batch_screener_view():
 #  MAIN
 # ─────────────────────────────────────────────────────────────────────
 def main():
-    inject_css(); render_sidebar(); t = T()
+    inject_css()
+
+    # ── Price cache: auto-refresh (idempotent — safe on every Streamlit rerun) ──
+    if is_price_cache_stale() and not is_price_build_running():
+        start_background_price_build(ALL_TICKERS)
+
+    # ── Load price cache once into session state (in-memory lookup for screener) ──
+    build_running = is_price_build_running()
+    if "price_cache_was_running" not in st.session_state:
+        st.session_state.price_cache_was_running = build_running
+    if "price_cache" not in st.session_state:
+        st.session_state.price_cache = load_price_cache()
+    elif st.session_state.price_cache_was_running and not build_running:
+        # Build just completed — reload from disk
+        st.session_state.price_cache = load_price_cache()
+    st.session_state.price_cache_was_running = build_running
+
+    render_sidebar(); t = T()
     universe_count = len(ALL_TICKERS)
     st.markdown(
         f'<div style="display:flex;align-items:baseline;justify-content:space-between;'
