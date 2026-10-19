@@ -15,3 +15,4 @@ AGENTS.md
 *_status.json
 price_cache_metadata.json
 *.log
+.ruff_cache/

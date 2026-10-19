@@ -1,5 +1,7 @@
 # MFM Momentum Engine v4
 
+[![CI](https://github.com/aadithyasumod/mfm_app/actions/workflows/ci.yml/badge.svg)](https://github.com/aadithyasumod/mfm_app/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white) ![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white) ![License](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)
+
 A Streamlit app that scores any NSE or BSE equity from 0 to 100 on five momentum factors, with a single-stock view, a batch screener and end-of-day prices taken from the official NSE bhavcopy.
 
 ![Single Stock view](docs/assets/app.png)
@@ -75,3 +77,9 @@ requirements.txt
 - For analysis and education only; not investment advice.
 - Earnings data comes from Yahoo's quarterly financials and is often missing for small caps; the factor still scores.
 - The bhavcopy is published around 18:30–19:00 IST; before that the previous session's close is used.
+
+## License
+
+Copyright © 2026 aadithyasumod. All rights reserved.
+
+No license is granted. The code is published for reference: you may view it, but not use, copy, modify or distribute it without written permission.
